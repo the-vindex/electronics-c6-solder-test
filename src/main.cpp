@@ -176,6 +176,12 @@ static void test_pin(gpio_num_t pin) {
 
     usb_printf("Blinking IO%d - Press button to continue to next pin...\r\n", pin);
 
+    // Wait for button release first
+    while (gpio_get_level(BUTTON_PIN) == 0) {
+        delay_ms(10);
+    }
+    delay_ms(50);
+
     configure_pin_output(pin);
 
     // Blink until button pressed
