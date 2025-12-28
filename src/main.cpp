@@ -90,6 +90,17 @@ static void configure_pin_output(gpio_num_t pin) {
     gpio_config(&io_conf);
 }
 
+static void configure_pin_floating(gpio_num_t pin) {
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << pin),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf);
+}
+
 static void detect_shorts_to_ground(void) {
     usb_print("\r\n=== Checking for shorts to GND ===\r\n");
 
@@ -175,8 +186,8 @@ static void test_pin(gpio_num_t pin) {
         delay_ms(200);
     }
 
-    // Cleanup
-    configure_pin_input_pullup(pin);
+    // Cleanup - leave floating to prevent faint LED glow
+    configure_pin_floating(pin);
     delay_ms(50); // Debounce
 
     usb_printf("IO%d test complete.\r\n", pin);
@@ -268,6 +279,11 @@ extern "C" void app_main(void) {
     // Interactive pin testing
     usb_print("\r\n--- PHASE 2: Interactive Pin Testing ---\r\n");
     usb_printf("Testing %d GPIO pins...\r\n", NUM_TEST_PINS);
+
+    // Disable pull-ups on all test pins to prevent faint LED glow
+    for (int i = 0; i < NUM_TEST_PINS; i++) {
+        configure_pin_floating(TEST_PINS[i]);
+    }
 
     for (int i = 0; i < NUM_TEST_PINS; i++) {
         test_pin(TEST_PINS[i]);
