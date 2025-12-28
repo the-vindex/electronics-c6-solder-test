@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -12,19 +13,16 @@
 // Onboard LED
 #define ONBOARD_LED GPIO_NUM_15
 
-// All GPIO pins to test (excluding button pin IO0, tested last)
+// Safe GPIO pins only (excluding IO0 button, IO15 onboard LED)
+// Per espboards.dev: IO0, IO1, IO2, IO3, IO14, IO20 are safe
 static const gpio_num_t TEST_PINS[] = {
-    GPIO_NUM_1, GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4, GPIO_NUM_5,
-    GPIO_NUM_6, GPIO_NUM_7, GPIO_NUM_8, GPIO_NUM_9, GPIO_NUM_14,
-    GPIO_NUM_15, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_20
+    GPIO_NUM_1, GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_14, GPIO_NUM_20
 };
 #define NUM_TEST_PINS (sizeof(TEST_PINS) / sizeof(TEST_PINS[0]))
 
-// All GPIO pins including button for short detection
+// All safe GPIO pins for short detection
 static const gpio_num_t ALL_PINS[] = {
-    GPIO_NUM_0, GPIO_NUM_1, GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4, GPIO_NUM_5,
-    GPIO_NUM_6, GPIO_NUM_7, GPIO_NUM_8, GPIO_NUM_9, GPIO_NUM_14,
-    GPIO_NUM_15, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_20
+    GPIO_NUM_0, GPIO_NUM_1, GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_14, GPIO_NUM_20
 };
 #define NUM_ALL_PINS (sizeof(ALL_PINS) / sizeof(ALL_PINS[0]))
 
@@ -44,7 +42,7 @@ static void usb_printf(const char* fmt, ...) {
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
-    usb_print(buf);
+    usb_serial_jtag_write_bytes((const uint8_t*)buf, strlen(buf), pdMS_TO_TICKS(100));
 }
 
 static void blink_onboard_led(int times, int delay_time) {
@@ -104,6 +102,10 @@ static void detect_shorts_to_ground(void) {
             usb_printf("WARNING: IO%d appears shorted to GND!\r\n", pin);
             shorts_detected = true;
         }
+        // Quick blink to show progress
+        gpio_set_level(ONBOARD_LED, 1);
+        delay_ms(30);
+        gpio_set_level(ONBOARD_LED, 0);
     }
 
     if (!shorts_detected) {
@@ -143,6 +145,11 @@ static void detect_shorts_between_pins(void) {
         // Restore to INPUT_PULLUP
         configure_pin_input_pullup(test_pin);
         delay_ms(5);
+
+        // Quick blink to show progress
+        gpio_set_level(ONBOARD_LED, 1);
+        delay_ms(30);
+        gpio_set_level(ONBOARD_LED, 0);
     }
 
     if (!shorts_detected) {
@@ -214,23 +221,37 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
     esp_vfs_usb_serial_jtag_use_driver();
 
+    // Wait for USB host to enumerate (important for serial output)
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
     // Setup onboard LED
     configure_pin_output(ONBOARD_LED);
 
     // Setup button with internal pull-up
     configure_pin_input_pullup(BUTTON_PIN);
 
+    // Wait for serial console to connect - blink until we receive any character
+    usb_print("\r\nPress any key in serial monitor to start...\r\n");
+
+    // Blink slowly while waiting for serial input
+    uint8_t rx_byte;
+    while (usb_serial_jtag_read_bytes(&rx_byte, 1, pdMS_TO_TICKS(100)) == 0) {
+        gpio_set_level(ONBOARD_LED, 1);
+        delay_ms(200);
+        gpio_set_level(ONBOARD_LED, 0);
+        delay_ms(200);
+    }
+
+    // Wait 2 seconds after connection
+    delay_ms(2000);
+
     usb_print("\r\n========================================\r\n");
     usb_print("  ESP32-C6 Super Mini Solder Test\r\n");
     usb_print("========================================\r\n");
+    usb_print("\r\nStarting test!\r\n");
     usb_print("\r\nHardware setup:\r\n");
     usb_print("- Button: IO0 to GND\r\n");
     usb_print("- LED: One leg to GND, other leg free\r\n");
-
-    // Blink onboard LED to confirm boot
-    usb_print("\r\nBlinking onboard LED (IO15) to confirm boot...\r\n");
-    blink_onboard_led(3, 200);
-    usb_print("Boot OK! Serial working = TX/RX OK!\r\n");
 
     // Run short detection
     usb_print("\r\n--- PHASE 1: Short Detection ---\r\n");
