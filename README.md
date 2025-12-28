@@ -36,8 +36,11 @@ No external resistor needed - the GPIO drive strength and LED forward voltage pr
 # Build only
 pio run
 
-# Build and upload
+# Build and upload (may fail on VMware, see below)
 pio run -t upload
+
+# Flash using script (more reliable with VMware)
+./flash.sh /dev/ttyACM0
 
 # Open serial monitor
 pio device monitor
@@ -72,12 +75,20 @@ pio device monitor
 - Board boots (onboard LED IO15 blinks 3x, serial output works)
 - All 15 GPIO pins successfully blink the LED
 
-## Flashing from Windows (esptool)
+## Flashing
 
-If flashing from Linux VM has USB issues, use Windows with esptool:
+### From Linux (with flash.sh)
 
 ```bash
-esptool.py --chip esp32c6 --port COM3 write_flash 0x0 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin
+./flash.sh /dev/ttyACM0
+```
+
+The script uses `--no-stub` flag which is more reliable for VMware USB passthrough.
+
+### From Windows (esptool)
+
+```bash
+esptool.py --chip esp32c6 --port COM3 --no-stub write_flash 0x0 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin
 ```
 
 Flash addresses:
@@ -93,10 +104,60 @@ Flash addresses:
    - `sdkconfig.defaults`: `CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y`
    - `platformio.ini`: `board_upload.flash_size = 4MB`
 
-2. **Console Output**: Uses USB Serial JTAG, not UART. Requires:
-   - `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` in sdkconfig.defaults
+2. **Framework**: Arduino framework is NOT supported for ESP32-C6 with this board definition. Use ESP-IDF framework.
 
-3. **Framework**: Arduino framework is NOT supported for ESP32-C6 with this board definition. Use ESP-IDF framework.
+### ESP32-C6 USB Serial JTAG - Critical Information
+
+The ESP32-C6 has a **built-in USB Serial/JTAG controller** - fundamentally different from older ESP32 boards that used external USB-UART bridges (CP2102, CH340).
+
+#### Why USB Works in Download Mode But Not Normal Mode
+
+- **Download mode** (hold BOOT, press RESET): The ROM bootloader *always* enables USB Serial/JTAG - hardcoded in ROM, independent of firmware.
+- **Normal mode**: Your firmware must explicitly initialize USB. The `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` setting alone is NOT sufficient!
+
+#### Required USB Initialization Code
+
+Simply setting config options doesn't work. You MUST explicitly initialize in code:
+
+```cpp
+#include "driver/usb_serial_jtag.h"
+#include "esp_vfs_usb_serial_jtag.h"
+
+void app_main(void) {
+    // 1. Install USB Serial JTAG driver
+    usb_serial_jtag_driver_config_t usb_cfg = {
+        .tx_buffer_size = 1024,
+        .rx_buffer_size = 1024,
+    };
+    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
+
+    // 2. Connect VFS (so printf works)
+    esp_vfs_usb_serial_jtag_use_driver();
+
+    // Now USB is active and printf() will work
+}
+```
+
+#### Why printf() May Not Work
+
+Even with the above, `printf()` may not output anything. For guaranteed output, use direct writes:
+
+```cpp
+static void usb_print(const char* msg) {
+    usb_serial_jtag_write_bytes((const uint8_t*)msg, strlen(msg), pdMS_TO_TICKS(100));
+}
+```
+
+#### sdkconfig.defaults Required Settings
+
+```
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+```
+
+The `CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION` prevents the chip from entering light sleep when USB is connected, which would disconnect USB.
 
 ### PlatformIO + ESP-IDF
 
@@ -107,23 +168,37 @@ Flash addresses:
 
 2. **sdkconfig caching**: Changes to `sdkconfig.defaults` require deleting `.pio` folder to take effect.
 
-### VMware USB Passthrough
+3. **Bootloader rebuild**: If only `sdkconfig.defaults` changes, the bootloader may not rebuild. Always do `rm -rf .pio` after config changes.
 
-USB passthrough to Linux VMs can be unreliable for ESP32 flashing. Workaround:
-- Use VMware shared folders to copy firmware binaries
-- Flash from Windows host using esptool
+### VMware USB Passthrough Issues
+
+USB passthrough to Linux VMs can be unreliable for ESP32:
+
+1. **Upload failures**: Use `--no-stub` flag with esptool for more reliable flashing
+2. **Device disappears after reset**: VMware may not reconnect USB after device re-enumerates
+3. **Serial data doesn't flow**: Device shows up but no data - use Windows host instead
+
+#### VMware Workarounds
+
+- Use `./flash.sh` which includes `--no-stub` flag
+- Copy binaries to VMware shared folder, flash from Windows
+- Add to .vmx file: `usb.autoConnect.device0 = "0x303a:0x1001"` for auto-connect
 
 ## Project Structure
 
 ```
-├── platformio.ini      # PlatformIO configuration
-├── sdkconfig.defaults  # ESP-IDF configuration defaults
+├── platformio.ini          # PlatformIO configuration
+├── sdkconfig.defaults      # ESP-IDF configuration defaults
+├── flash.sh                # Reliable flash script with --no-stub
 ├── src/
-│   └── main.cpp        # Main firmware code
-└── README.md           # This file
+│   └── main.cpp            # Main solder test firmware
+├── examples/
+│   └── minimal_usb_test.cpp  # Minimal USB Serial JTAG test
+└── README.md               # This file
 ```
 
 ## References
 
 - [ESP32-C6 Super Mini Pinout](https://www.espboards.dev/esp32/esp32-c6-super-mini/)
+- [ESP-IDF USB Serial/JTAG Console](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/api-guides/usb-serial-jtag-console.html)
 - [PlatformIO ESP32 Platform](https://docs.platformio.org/en/latest/platforms/espressif32.html)
