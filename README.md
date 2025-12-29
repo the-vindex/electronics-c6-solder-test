@@ -42,6 +42,9 @@ pio run -t upload
 # Flash using script (more reliable with VMware)
 ./flash.sh /dev/ttyACM0
 
+# Reset device without reflashing (no flash wear)
+./reset.sh /dev/ttyACM0
+
 # Open serial monitor
 pio device monitor
 ```
@@ -50,13 +53,15 @@ pio device monitor
 
 1. Connect hardware (button on IO0, LED to GND)
 2. Upload firmware and open serial monitor
-3. Follow prompts:
+3. **Press any key** in serial monitor to start the test
+4. Follow prompts:
    - **Phase 1**: Firmware automatically checks for shorts (to GND and between pins)
    - **Phase 2**: For each GPIO pin:
      - Plug LED's free leg into the pin
      - Press button to start blinking
-     - Verify LED blinks
-     - Press button to advance to next pin
+     - Release button - LED starts blinking
+     - Verify LED blinks brightly
+     - Press button again to advance to next pin
    - **Final test**: Move button to IO1, connect LED to IO0, test IO0
 
 ## What It Tests
@@ -69,11 +74,24 @@ pio device monitor
   - Each pin toggles HIGH/LOW at 200ms intervals
   - Visual confirmation via LED blinking
 
+## Safe GPIO Pins
+
+Per [espboards.dev](https://www.espboards.dev/esp32/esp32-c6-super-mini/), only these pins are safe for general GPIO use:
+
+| Pin | Status |
+|-----|--------|
+| IO0, IO1, IO2, IO3, IO14, IO20 | ✅ Safe - tested by this firmware |
+| IO4, IO5, IO6, IO7 | ⚠️ JTAG debugging pins |
+| IO8, IO9 | ⚠️ Boot strapping pins |
+| IO15 | ⚠️ Used for onboard LED |
+| IO18, IO19 | ❌ Connected to internal flash - DO NOT USE |
+
 ## Success Criteria
 
 - No shorts detected in Phase 1
-- Board boots (onboard LED IO15 blinks 3x, serial output works)
-- All 15 GPIO pins successfully blink the LED
+- Board boots (onboard LED IO15 blinks, serial output works)
+- All 5 safe GPIO pins (IO1, IO2, IO3, IO14, IO20) successfully blink the LED
+- IO0 tested last (requires moving button to IO1)
 
 ## Flashing
 
@@ -184,12 +202,21 @@ USB passthrough to Linux VMs can be unreliable for ESP32:
 - Copy binaries to VMware shared folder, flash from Windows
 - Add to .vmx file: `usb.autoConnect.device0 = "0x303a:0x1001"` for auto-connect
 
+### USB Reset Behavior
+
+Some ESP32-C6 boards may not re-enumerate USB after pressing the reset button, requiring a full power cycle. This is a board-to-board variation issue, not a firmware problem. If affected:
+
+- Use `./reset.sh` to reset via software (triggers USB re-enumeration properly)
+- Or power cycle instead of using the reset button
+- The board still works fine for production use where USB is only used for power
+
 ## Project Structure
 
 ```
 ├── platformio.ini          # PlatformIO configuration
 ├── sdkconfig.defaults      # ESP-IDF configuration defaults
 ├── flash.sh                # Reliable flash script with --no-stub
+├── reset.sh                # Reset device without reflashing
 ├── src/
 │   └── main.cpp            # Main solder test firmware
 ├── examples/
